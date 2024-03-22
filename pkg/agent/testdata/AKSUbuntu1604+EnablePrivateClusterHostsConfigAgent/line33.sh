@@ -1,358 +1,89 @@
-#!/bin/bash
-ERR_FILE_WATCH_TIMEOUT=6 
-set -x
-if [ -f /opt/azure/containers/provision.complete ]; then
-      echo "Already ran to success exiting..."
-      exit 0
-fi
+CSE_STARTTIME=$(date)
+CSE_STARTTIME_FORMATTED=$(date +"%F %T.%3N")
+timeout -k5s 15m /bin/bash /opt/azure/containers/provision.sh >> /var/log/azure/cluster-provision.log 2>&1
+EXIT_CODE=$?
+systemctl --no-pager -l status kubelet >> /var/log/azure/cluster-provision-cse-output.log 2>&1
+OUTPUT=$(tail -c 3000 "/var/log/azure/cluster-provision.log")
+KERNEL_STARTTIME=$(systemctl show -p KernelTimestamp | sed -e  "s/KernelTimestamp=//g" || true)
+KERNEL_STARTTIME_FORMATTED=$(date -d "${KERNEL_STARTTIME}" +"%F %T.%3N" )
+CLOUDINITLOCAL_STARTTIME=$(systemctl show cloud-init-local -p ExecMainStartTimestamp | sed -e "s/ExecMainStartTimestamp=//g" || true)
+CLOUDINITLOCAL_STARTTIME_FORMATTED=$(date -d "${CLOUDINITLOCAL_STARTTIME}" +"%F %T.%3N" )
+CLOUDINIT_STARTTIME=$(systemctl show cloud-init -p ExecMainStartTimestamp | sed -e "s/ExecMainStartTimestamp=//g" || true)
+CLOUDINIT_STARTTIME_FORMATTED=$(date -d "${CLOUDINIT_STARTTIME}" +"%F %T.%3N" )
+CLOUDINITFINAL_STARTTIME=$(systemctl show cloud-final -p ExecMainStartTimestamp | sed -e "s/ExecMainStartTimestamp=//g" || true)
+CLOUDINITFINAL_STARTTIME_FORMATTED=$(date -d "${CLOUDINITFINAL_STARTTIME}" +"%F %T.%3N" )
+NETWORKD_STARTTIME=$(systemctl show systemd-networkd -p ExecMainStartTimestamp | sed -e "s/ExecMainStartTimestamp=//g" || true)
+NETWORKD_STARTTIME_FORMATTED=$(date -d "${NETWORKD_STARTTIME}" +"%F %T.%3N" )
+GUEST_AGENT_STARTTIME=$(systemctl show walinuxagent.service -p ExecMainStartTimestamp | sed -e "s/ExecMainStartTimestamp=//g" || true)
+GUEST_AGENT_STARTTIME_FORMATTED=$(date -d "${GUEST_AGENT_STARTTIME}" +"%F %T.%3N" )
+KUBELET_START_TIME=$(systemctl show kubelet.service -p ExecMainStartTimestamp | sed -e "s/ExecMainStartTimestamp=//g" || true)
+KUBELET_START_TIME_FORMATTED=$(date -d "${KUBELET_START_TIME}" +"%F %T.%3N" )
+KUBELET_READY_TIME_FORMATTED="$(date -d "$(journalctl -u kubelet | grep NodeReady | cut -d' ' -f1-3)" +"%F %T.%3N")"
+SYSTEMD_SUMMARY=$(systemd-analyze || true)
+CSE_ENDTIME_FORMATTED=$(date +"%F %T.%3N")
+EVENTS_LOGGING_DIR=/var/log/azure/Microsoft.Azure.Extensions.CustomScript/events/
+EVENTS_FILE_NAME=$(date +%s%3N)
+EXECUTION_DURATION=$(echo $(($(date +%s) - $(date -d "$CSE_STARTTIME" +%s))))
 
-aptmarkWALinuxAgent hold &
+JSON_STRING=$( jq -n \
+                  --arg ec "$EXIT_CODE" \
+                  --arg op "$OUTPUT" \
+                  --arg er "" \
+                  --arg ed "$EXECUTION_DURATION" \
+                  --arg ks "$KERNEL_STARTTIME" \
+                  --arg cinitl "$CLOUDINITLOCAL_STARTTIME" \
+                  --arg cinit "$CLOUDINIT_STARTTIME" \
+                  --arg cf "$CLOUDINITFINAL_STARTTIME" \
+                  --arg ns "$NETWORKD_STARTTIME" \
+                  --arg cse "$CSE_STARTTIME" \
+                  --arg ga "$GUEST_AGENT_STARTTIME" \
+                  --arg ss "$SYSTEMD_SUMMARY" \
+                  --arg kubelet "$KUBELET_START_TIME" \
+                  '{ExitCode: $ec, Output: $op, Error: $er, ExecDuration: $ed, KernelStartTime: $ks, CloudInitLocalStartTime: $cinitl, CloudInitStartTime: $cinit, CloudFinalStartTime: $cf, NetworkdStartTime: $ns, CSEStartTime: $cse, GuestAgentStartTime: $ga, SystemdSummary: $ss, BootDatapoints: { KernelStartTime: $ks, CSEStartTime: $cse, GuestAgentStartTime: $ga, KubeletStartTime: $kubelet }}' )
+mkdir -p /var/log/azure/aks
+echo $JSON_STRING | tee /var/log/azure/aks/provision.json
 
-LOG_DIR=/var/log/azure/aks
-mkdir -p ${LOG_DIR}
-ln -s /var/log/azure/cluster-provision.log \
-      /var/log/azure/cluster-provision-cse-output.log \
-      /opt/azure/*.json \
-      /opt/azure/cloud-init-files.paved \
-      /opt/azure/vhd-install.complete \
-      ${LOG_DIR}/
+message_string=$( jq -n \
+--arg EXECUTION_DURATION                  "${EXECUTION_DURATION}" \
+--arg EXIT_CODE                           "${EXIT_CODE}" \
+--arg KERNEL_STARTTIME_FORMATTED          "${KERNEL_STARTTIME_FORMATTED}" \
+--arg CLOUDINITLOCAL_STARTTIME_FORMATTED  "${CLOUDINITLOCAL_STARTTIME_FORMATTED}" \
+--arg CLOUDINIT_STARTTIME_FORMATTED       "${CLOUDINIT_STARTTIME_FORMATTED}" \
+--arg CLOUDINITFINAL_STARTTIME_FORMATTED  "${CLOUDINITFINAL_STARTTIME_FORMATTED}" \
+--arg NETWORKD_STARTTIME_FORMATTED        "${NETWORKD_STARTTIME_FORMATTED}" \
+--arg GUEST_AGENT_STARTTIME_FORMATTED     "${GUEST_AGENT_STARTTIME_FORMATTED}" \
+--arg KUBELET_START_TIME_FORMATTED        "${KUBELET_START_TIME_FORMATTED}" \
+--arg KUBELET_READY_TIME_FORMATTED       "${KUBELET_READY_TIME_FORMATTED}" \
+'{ExitCode: $EXIT_CODE, E2E: $EXECUTION_DURATION, KernelStartTime: $KERNEL_STARTTIME_FORMATTED, CloudInitLocalStartTime: $CLOUDINITLOCAL_STARTTIME_FORMATTED, CloudInitStartTime: $CLOUDINIT_STARTTIME_FORMATTED, CloudFinalStartTime: $CLOUDINITFINAL_STARTTIME_FORMATTED, NetworkdStartTime: $NETWORKD_STARTTIME_FORMATTED, GuestAgentStartTime: $GUEST_AGENT_STARTTIME_FORMATTED, KubeletStartTime: $KUBELET_START_TIME_FORMATTED, KubeletReadyTime: $KUBELET_READY_TIME_FORMATTED } | tostring'
+)
+message_string=$(echo $message_string | sed 's/\\//g' | sed 's/^.\(.*\).$/\1/')
 
-python3 /opt/azure/containers/provision_redact_cloud_config.py \
-    --cloud-config-path /var/lib/cloud/instance/cloud-config.txt \
-    --output-path ${LOG_DIR}/cloud-config.txt
+EVENT_JSON=$( jq -n \
+    --arg Timestamp     "${CSE_STARTTIME_FORMATTED}" \
+    --arg OperationId   "${CSE_ENDTIME_FORMATTED}" \
+    --arg Version       "1.23" \
+    --arg TaskName      "AKS.CSE.cse_start" \
+    --arg EventLevel    "${eventlevel}" \
+    --arg Message       "${message_string}" \
+    --arg EventPid      "0" \
+    --arg EventTid      "0" \
+    '{Timestamp: $Timestamp, OperationId: $OperationId, Version: $Version, TaskName: $TaskName, EventLevel: $EventLevel, Message: $Message, EventPid: $EventPid, EventTid: $EventTid}'
+)
+echo ${EVENT_JSON} > ${EVENTS_LOGGING_DIR}${EVENTS_FILE_NAME}.json
 
-UBUNTU_RELEASE=$(lsb_release -r -s)
-if [[ ${UBUNTU_RELEASE} == "16.04" ]]; then
-    sudo apt-get -y autoremove chrony
-    echo $?
-    sudo systemctl restart systemd-timesyncd
-fi
-
-echo $(date),$(hostname), startcustomscript>>/opt/m
-
-for i in $(seq 1 3600); do
-    if [ -s "${CSE_HELPERS_FILEPATH}" ]; then
-        grep -Fq '#HELPERSEOF' "${CSE_HELPERS_FILEPATH}" && break
-    fi
-    if [ $i -eq 3600 ]; then
-        exit $ERR_FILE_WATCH_TIMEOUT
+upload_logs() {
+    if test -x /opt/azure/containers/aks-log-collector.sh; then
+        /opt/azure/containers/aks-log-collector.sh
     else
-        sleep 1
+        PYTHONPATH=$(find /var/lib/waagent -name WALinuxAgent\*.egg | sort -rV | head -n1)
+        python3 $PYTHONPATH -collect-logs -full >/dev/null 2>&1
+        python3 /opt/azure/containers/provision_send_logs.py >/dev/null 2>&1
     fi
-done
-sed -i "/#HELPERSEOF/d" "${CSE_HELPERS_FILEPATH}"
-source "${CSE_HELPERS_FILEPATH}"
-
-source "${CSE_DISTRO_HELPERS_FILEPATH}"
-source "${CSE_INSTALL_FILEPATH}"
-source "${CSE_DISTRO_INSTALL_FILEPATH}"
-source "${CSE_CONFIG_FILEPATH}"
-
-if [[ "${DISABLE_SSH}" == "true" ]]; then
-    disableSSH || exit $ERR_DISABLE_SSH
-fi
-
-echo "private egress proxy address is '${PRIVATE_EGRESS_PROXY_ADDRESS}'"
-
-if [[ "${SHOULD_CONFIGURE_HTTP_PROXY}" == "true" ]]; then
-    if [[ "${SHOULD_CONFIGURE_HTTP_PROXY_CA}" == "true" ]]; then
-        configureHTTPProxyCA || exit $ERR_UPDATE_CA_CERTS
-    fi
-    configureEtcEnvironment
-fi
-
-
-if [[ "${SHOULD_CONFIGURE_CUSTOM_CA_TRUST}" == "true" ]]; then
-    configureCustomCaCertificate || exit $ERR_UPDATE_CA_CERTS
-fi
-
-if [[ -n "${OUTBOUND_COMMAND}" ]]; then
-    if [[ -n "${PROXY_VARS}" ]]; then
-        eval $PROXY_VARS
-    fi
-    retrycmd_if_failure 50 1 5 $OUTBOUND_COMMAND >> /var/log/azure/cluster-provision-cse-output.log 2>&1 || exit $ERR_OUTBOUND_CONN_FAIL;
-fi
-
-source /etc/os-release
-
-if [[ ${ID} != "mariner" ]]; then
-    echo "Removing man-db auto-update flag file..."
-    logs_to_events "AKS.CSE.removeManDbAutoUpdateFlagFile" removeManDbAutoUpdateFlagFile
-fi
-
-export -f should_skip_nvidia_drivers
-skip_nvidia_driver_install=$(retrycmd_if_failure_no_stats 10 1 10 bash -cx should_skip_nvidia_drivers)
-ret=$?
-if [[ "$ret" != "0" ]]; then
-    echo "Failed to determine if nvidia driver install should be skipped"
-    exit $ERR_NVIDIA_DRIVER_INSTALL
-fi
-
-if [[ "${GPU_NODE}" != "true" ]] || [[ "${skip_nvidia_driver_install}" == "true" ]]; then
-    logs_to_events "AKS.CSE.cleanUpGPUDrivers" cleanUpGPUDrivers
-fi
-
-logs_to_events "AKS.CSE.disableSystemdResolved" disableSystemdResolved
-
-logs_to_events "AKS.CSE.configureAdminUser" configureAdminUser
-
-VHD_LOGS_FILEPATH=/opt/azure/vhd-install.complete
-if [ -f $VHD_LOGS_FILEPATH ]; then
-    echo "detected golden image pre-install"
-    logs_to_events "AKS.CSE.cleanUpContainerImages" cleanUpContainerImages
-    FULL_INSTALL_REQUIRED=false
+}
+if [ $EXIT_CODE -ne 0 ]; then
+    upload_logs
 else
-    if [[ "${IS_VHD}" = true ]]; then
-        echo "Using VHD distro but file $VHD_LOGS_FILEPATH not found"
-        exit $ERR_VHD_FILE_NOT_FOUND
-    fi
-    FULL_INSTALL_REQUIRED=true
+    upload_logs &
 fi
 
-if [[ $OS == $UBUNTU_OS_NAME ]] && [ "$FULL_INSTALL_REQUIRED" = "true" ]; then
-    logs_to_events "AKS.CSE.installDeps" installDeps
-else
-    echo "Golden image; skipping dependencies installation"
-fi
-
-logs_to_events "AKS.CSE.installContainerRuntime" installContainerRuntime
-if [ "${NEEDS_CONTAINERD}" == "true" ] && [ "${TELEPORT_ENABLED}" == "true" ]; then 
-    logs_to_events "AKS.CSE.installTeleportdPlugin" installTeleportdPlugin
-fi
-
-setupCNIDirs
-
-logs_to_events "AKS.CSE.installNetworkPlugin" installNetworkPlugin
-
-if [ "${IS_KRUSTLET}" == "true" ]; then
-    logs_to_events "AKS.CSE.downloadKrustlet" downloadContainerdWasmShims
-fi
-
-if [ "${ENABLE_SECURE_TLS_BOOTSTRAPPING}" == "true" ]; then
-    logs_to_events "AKS.CSE.downloadSecureTLSBootstrapKubeletExecPlugin" downloadSecureTLSBootstrapKubeletExecPlugin
-fi
-
-REBOOTREQUIRED=false
-
-echo $(date),$(hostname), "Start configuring GPU drivers"
-if [[ "${GPU_NODE}" = true ]] && [[ "${skip_nvidia_driver_install}" != "true" ]]; then
-    logs_to_events "AKS.CSE.ensureGPUDrivers" ensureGPUDrivers
-    if [[ "${ENABLE_GPU_DEVICE_PLUGIN_IF_NEEDED}" = true ]]; then
-        if [[ "${MIG_NODE}" == "true" ]] && [[ -f "/etc/systemd/system/nvidia-device-plugin.service" ]]; then
-            mkdir -p "/etc/systemd/system/nvidia-device-plugin.service.d"
-            tee "/etc/systemd/system/nvidia-device-plugin.service.d/10-mig_strategy.conf" > /dev/null <<'EOF'
-[Service]
-Environment="MIG_STRATEGY=--mig-strategy single"
-ExecStart=
-ExecStart=/usr/local/nvidia/bin/nvidia-device-plugin $MIG_STRATEGY    
-EOF
-        fi
-        logs_to_events "AKS.CSE.start.nvidia-device-plugin" "systemctlEnableAndStart nvidia-device-plugin" || exit $ERR_GPU_DEVICE_PLUGIN_START_FAIL
-    else
-        logs_to_events "AKS.CSE.stop.nvidia-device-plugin" "systemctlDisableAndStop nvidia-device-plugin"
-    fi
-
-    if [[ "${GPU_NEEDS_FABRIC_MANAGER}" == "true" ]]; then
-        if [[ $OS == $MARINER_OS_NAME ]]; then
-            logs_to_events "AKS.CSE.installNvidiaFabricManager" installNvidiaFabricManager
-        fi
-        logs_to_events "AKS.CSE.nvidia-fabricmanager" "systemctlEnableAndStart nvidia-fabricmanager" || exit $ERR_GPU_DRIVERS_START_FAIL
-    fi
-
-    if [[ "${MIG_NODE}" == "true" ]]; then
-        REBOOTREQUIRED=true
-        
-        logs_to_events "AKS.CSE.ensureMigPartition" ensureMigPartition
-    fi
-fi
-
-echo $(date),$(hostname), "End configuring GPU drivers"
-
-if [ "${NEEDS_DOCKER_LOGIN}" == "true" ]; then
-    set +x
-    docker login -u $SERVICE_PRINCIPAL_CLIENT_ID -p $SERVICE_PRINCIPAL_CLIENT_SECRET "${AZURE_PRIVATE_REGISTRY_SERVER}"
-    set -x
-fi
-
-logs_to_events "AKS.CSE.installKubeletKubectlAndKubeProxy" installKubeletKubectlAndKubeProxy
-
-createKubeManifestDir
-
-if [ "${HAS_CUSTOM_SEARCH_DOMAIN}" == "true" ]; then
-    "${CUSTOM_SEARCH_DOMAIN_FILEPATH}" > /opt/azure/containers/setup-custom-search-domain.log 2>&1 || exit $ERR_CUSTOM_SEARCH_DOMAINS_FAIL
-fi
-
-
-mkdir -p "/etc/systemd/system/kubelet.service.d"
-
-logs_to_events "AKS.CSE.configureK8s" configureK8s
-
-logs_to_events "AKS.CSE.configureCNI" configureCNI
-
-if [ "${IPV6_DUAL_STACK_ENABLED}" == "true" ]; then
-    logs_to_events "AKS.CSE.ensureDHCPv6" ensureDHCPv6
-fi
-
-if [ "${NEEDS_CONTAINERD}" == "true" ]; then
-    logs_to_events "AKS.CSE.ensureContainerd" ensureContainerd 
-else
-    logs_to_events "AKS.CSE.ensureDocker" ensureDocker
-fi
-
-if [[ "${MESSAGE_OF_THE_DAY}" != "" ]]; then
-    echo "${MESSAGE_OF_THE_DAY}" | base64 -d > /etc/motd
-fi
-
-if [[ "${TARGET_CLOUD}" == "AzureChinaCloud" ]]; then
-    retagMCRImagesForChina
-fi
-
-if [[ "${ENABLE_HOSTS_CONFIG_AGENT}" == "true" ]]; then
-    logs_to_events "AKS.CSE.configPrivateClusterHosts" configPrivateClusterHosts
-fi
-
-if [ "${SHOULD_CONFIG_TRANSPARENT_HUGE_PAGE}" == "true" ]; then
-    logs_to_events "AKS.CSE.configureTransparentHugePage" configureTransparentHugePage
-fi
-
-if [ "${SHOULD_CONFIG_SWAP_FILE}" == "true" ]; then
-    logs_to_events "AKS.CSE.configureSwapFile" configureSwapFile
-fi
-
-if [ "${NEEDS_CGROUPV2}" == "true" ]; then
-    tee "/etc/systemd/system/kubelet.service.d/10-cgroupv2.conf" > /dev/null <<EOF
-[Service]
-Environment="KUBELET_CGROUP_FLAGS=--cgroup-driver=systemd"
-EOF
-fi
-
-if [ "${NEEDS_CONTAINERD}" == "true" ]; then
-    mkdir -p /etc/containerd
-    echo "${KUBENET_TEMPLATE}" | base64 -d > /etc/containerd/kubenet_template.conf
-
-    tee "/etc/systemd/system/kubelet.service.d/10-containerd-base-flag.conf" > /dev/null <<'EOF'
-[Service]
-Environment="KUBELET_CONTAINERD_FLAGS=--runtime-request-timeout=15m --container-runtime-endpoint=unix:///run/containerd/containerd.sock --runtime-cgroups=/system.slice/containerd.service"
-EOF
-    
-    if ! semverCompare ${KUBERNETES_VERSION:-"0.0.0"} "1.27.0"; then
-        tee "/etc/systemd/system/kubelet.service.d/10-container-runtime-flag.conf" > /dev/null <<'EOF'
-[Service]
-Environment="KUBELET_CONTAINER_RUNTIME_FLAG=--container-runtime=remote"
-EOF
-    fi
-fi
-
-if [ "${HAS_KUBELET_DISK_TYPE}" == "true" ]; then
-    tee "/etc/systemd/system/kubelet.service.d/10-bindmount.conf" > /dev/null <<EOF
-[Unit]
-Requires=bind-mount.service
-After=bind-mount.service
-EOF
-fi
-
-logs_to_events "AKS.CSE.ensureSysctl" ensureSysctl
-
-if [ "${NEEDS_CONTAINERD}" == "true" ] &&  [ "${SHOULD_CONFIG_CONTAINERD_ULIMITS}" == "true" ]; then
-  logs_to_events "AKS.CSE.setContainerdUlimits" configureContainerdUlimits
-fi
-
-logs_to_events "AKS.CSE.ensureKubelet" ensureKubelet
-if [ "${ENSURE_NO_DUPE_PROMISCUOUS_BRIDGE}" == "true" ]; then
-    logs_to_events "AKS.CSE.ensureNoDupOnPromiscuBridge" ensureNoDupOnPromiscuBridge
-fi
-
-if [[ $OS == $UBUNTU_OS_NAME ]] || [[ $OS == $MARINER_OS_NAME ]]; then
-    logs_to_events "AKS.CSE.ubuntuSnapshotUpdate" ensureSnapshotUpdate
-fi
-
-if $FULL_INSTALL_REQUIRED; then
-    if [[ $OS == $UBUNTU_OS_NAME ]]; then
-        echo 2dd1ce17-079e-403c-b352-a1921ee207ee > /sys/bus/vmbus/drivers/hv_util/unbind
-        sed -i "13i\echo 2dd1ce17-079e-403c-b352-a1921ee207ee > /sys/bus/vmbus/drivers/hv_util/unbind\n" /etc/rc.local
-    fi
-fi
-
-VALIDATION_ERR=0
-
-API_SERVER_CONN_RETRIES=50
-if [[ $API_SERVER_NAME == *.privatelink.* ]]; then
-    API_SERVER_CONN_RETRIES=100
-fi
-if ! [[ ${API_SERVER_NAME} =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    API_SERVER_DNS_RETRY_TIMEOUT=300
-    if [[ $API_SERVER_NAME == *.privatelink.* ]]; then
-       API_SERVER_DNS_RETRY_TIMEOUT=600
-    fi
-    if [[ "${ENABLE_HOSTS_CONFIG_AGENT}" != "true" ]]; then
-        RES=$(logs_to_events "AKS.CSE.apiserverNslookup" "retrycmd_nslookup 1 15 ${API_SERVER_DNS_RETRY_TIMEOUT} ${API_SERVER_NAME}")
-        STS=$?
-    else
-        STS=0
-    fi
-    if [[ $STS != 0 ]]; then
-        time nslookup ${API_SERVER_NAME}
-        if [[ $RES == *"168.63.129.16"*  ]]; then
-            VALIDATION_ERR=$ERR_K8S_API_SERVER_AZURE_DNS_LOOKUP_FAIL
-        else
-            VALIDATION_ERR=$ERR_K8S_API_SERVER_DNS_LOOKUP_FAIL
-        fi
-    else
-        logs_to_events "AKS.CSE.apiserverNC" "retrycmd_if_failure ${API_SERVER_CONN_RETRIES} 1 10 nc -vz ${API_SERVER_NAME} 443" || time nc -vz ${API_SERVER_NAME} 443 || VALIDATION_ERR=$ERR_K8S_API_SERVER_CONN_FAIL
-    fi
-else
-    logs_to_events "AKS.CSE.apiserverNC" "retrycmd_if_failure ${API_SERVER_CONN_RETRIES} 1 10 nc -vz ${API_SERVER_NAME} 443" || time nc -vz ${API_SERVER_NAME} 443 || VALIDATION_ERR=$ERR_K8S_API_SERVER_CONN_FAIL
-fi
-
-if [[ ${ID} != "mariner" ]]; then
-    echo "Recreating man-db auto-update flag file and kicking off man-db update process at $(date)"
-    createManDbAutoUpdateFlagFile
-    /usr/bin/mandb && echo "man-db finished updates at $(date)" &
-fi
-
-if $REBOOTREQUIRED; then
-    echo 'reboot required, rebooting node in 1 minute'
-    /bin/bash -c "shutdown -r 1 &"
-    if [[ $OS == $UBUNTU_OS_NAME ]]; then
-        aptmarkWALinuxAgent unhold &
-    fi
-else
-    if [[ $OS == $UBUNTU_OS_NAME ]]; then
-        if [ "${ENABLE_UNATTENDED_UPGRADES}" == "true" ]; then
-            UU_CONFIG_DIR="/etc/apt/apt.conf.d/99periodic"
-            mkdir -p "$(dirname "${UU_CONFIG_DIR}")"
-            touch "${UU_CONFIG_DIR}"
-            chmod 0644 "${UU_CONFIG_DIR}"
-            echo 'APT::Periodic::Update-Package-Lists "1";' >> "${UU_CONFIG_DIR}"
-            echo 'APT::Periodic::Unattended-Upgrade "1";' >> "${UU_CONFIG_DIR}"
-            systemctl unmask apt-daily.service apt-daily-upgrade.service
-            systemctl enable apt-daily.service apt-daily-upgrade.service
-            systemctl enable apt-daily.timer apt-daily-upgrade.timer
-            systemctl restart --no-block apt-daily.timer apt-daily-upgrade.timer            
-            systemctl restart --no-block apt-daily.service
-            
-        fi
-        aptmarkWALinuxAgent unhold &
-    elif [[ $OS == $MARINER_OS_NAME ]]; then
-        if [ "${ENABLE_UNATTENDED_UPGRADES}" == "true" ]; then
-            if [ "${IS_KATA}" == "true" ]; then
-                echo 'EnableUnattendedUpgrade is not supported by kata images, will not be enabled'
-            else
-                systemctl disable dnf-automatic-notifyonly.timer
-                systemctl stop dnf-automatic-notifyonly.timer
-                systemctl unmask dnf-automatic-install.service || exit $ERR_SYSTEMCTL_START_FAIL
-                systemctl unmask dnf-automatic-install.timer || exit $ERR_SYSTEMCTL_START_FAIL
-                systemctlEnableAndStart dnf-automatic-install.timer || exit $ERR_SYSTEMCTL_START_FAIL
-            fi
-        fi
-    fi
-fi
-
-echo "Custom script finished. API server connection check code:" $VALIDATION_ERR
-echo $(date),$(hostname), endcustomscript>>/opt/m
-mkdir -p /opt/azure/containers && touch /opt/azure/containers/provision.complete
-
-exit $VALIDATION_ERR
-
-
-#EOF
+exit $EXIT_CODE

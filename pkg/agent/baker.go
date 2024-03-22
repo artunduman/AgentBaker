@@ -339,6 +339,9 @@ func getContainerServiceFuncMap(config *datamodel.NodeBootstrappingConfiguration
 	cs := config.ContainerService
 	profile := config.AgentPoolProfile
 	return template.FuncMap{
+		"GetExampleFilepath": func() string {
+			return newExampleFilepath
+		},
 		"Disable1804SystemdResolved": func() bool {
 			return config.Disable1804SystemdResolved
 		},

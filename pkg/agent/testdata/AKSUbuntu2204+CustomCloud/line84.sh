@@ -1,66 +1,61 @@
-#!/bin/bash
-set -x
-mkdir -p /root/AzureCACertificates
-certs=$(curl "http://168.63.129.16/machine?comp=acmspackage&type=cacertificates&ext=json")
-IFS_backup=$IFS
-IFS=$'\r\n'
-certNames=($(echo $certs | grep -oP '(?<=Name\": \")[^\"]*'))
-certBodies=($(echo $certs | grep -oP '(?<=CertBody\": \")[^\"]*'))
-for i in ${!certBodies[@]}; do
-    echo ${certBodies[$i]}  | sed 's/\\r\\n/\n/g' | sed 's/\\//g' > "/root/AzureCACertificates/$(echo ${certNames[$i]} | sed 's/.cer/.crt/g')"
-done
-IFS=$IFS_backup
-
-cp /root/AzureCACertificates/*.crt /usr/local/share/ca-certificates/
-/usr/sbin/update-ca-certificates
-
-cp /etc/ssl/certs/ca-certificates.crt /usr/lib/ssl/cert.pem
-
-action=${1:-init}
-if [ $action == "ca-refresh" ]
-then
-    exit
-fi
-
-(crontab -l ; echo "0 19 * * * $0 ca-refresh") | crontab -
-
-cloud-init status --wait
-repoDepotEndpoint="${REPO_DEPOT_ENDPOINT}"
-sudo sed -i "s,http://.[^ ]*,$repoDepotEndpoint,g" /etc/apt/sources.list
-
-systemctl stop systemd-timesyncd
-systemctl disable systemd-timesyncd
-
-chrony_conf="/etc/chrony/chrony.conf"
-if [ ! -e "$chrony_conf" ]; then
-    apt-get update
-    apt-get install chrony -y
-fi
-
-cat > $chrony_conf <<EOF
-
-#
-#pool ntp.ubuntu.com        iburst maxsources 4
-#pool 0.ubuntu.pool.ntp.org iburst maxsources 1
-#pool 1.ubuntu.pool.ntp.org iburst maxsources 1
-#pool 2.ubuntu.pool.ntp.org iburst maxsources 2
-
-keyfile /etc/chrony/chrony.keys
-
-driftfile /var/lib/chrony/chrony.drift
-
-#log tracking measurements statistics
-
-logdir /var/log/chrony
-
-maxupdateskew 100.0
-
-rtcsync
-
-refclock PHC /dev/ptp0 poll 3 dpoll -2 offset 0
-makestep 1.0 -1
-EOF
-
-systemctl restart chrony
-
+{
+    "containerd": {
+        "fileName": "moby-containerd_${CONTAINERD_VERSION}+azure-${CONTAINERD_PATCH_VERSION}.deb",
+        "downloadLocation": "/opt/containerd/downloads",
+        "downloadURL": "https://moby.blob.core.windows.net/moby/moby-containerd/${CONTAINERD_VERSION}+azure/${UBUNTU_CODENAME}/linux_${CPU_ARCH}/moby-containerd_${CONTAINERD_VERSION}+azure-ubuntu${UBUNTU_RELEASE}u${CONTAINERD_PATCH_VERSION}_${CPU_ARCH}.deb",
+        "versions": [],
+        "pinned": {
+            "1804": "1.7.1-1"
+        },
+        "edge": "1.7.14-1"
+    },
+    "runc": {
+        "fileName": "moby-runc_${RUNC_VERSION}+azure-ubuntu${RUNC_PATCH_VERSION}_${CPU_ARCH}.deb",
+        "downloadLocation": "/opt/runc/downloads",
+        "downloadURL": "https://moby.blob.core.windows.net/moby/moby-runc/${RUNC_VERSION}+azure/bionic/linux_${CPU_ARCH}/moby-runc_${RUNC_VERSION}+azure-ubuntu${RUNC_PATCH_VERSION}_${CPU_ARCH}.deb",
+        "versions": [],
+        "pinned": {
+            "1804": "1.1.12"
+        },
+        "installed": {
+            "default": "1.1.12"
+        }
+    },
+    "nvidia-container-runtime": {
+        "fileName": "",
+        "downloadLocation": "",
+        "downloadURL": "",
+        "versions": []
+    },
+    "nvidia-drivers": {
+        "fileName": "",
+        "downloadLocation": "",
+        "downloadURL": "",
+        "versions": []
+    },
+    "kubernetes": {
+        "fileName": "kubernetes-node-linux-arch.tar.gz",
+        "downloadLocation": "",
+        "downloadURL": "https://acs-mirror.azureedge.net/kubernetes/v${PATCHED_KUBE_BINARY_VERSION}/binaries/kubernetes-node-linux-${CPU_ARCH}.tar.gz",
+        "versions": [
+            "1.26.6",
+            "1.26.10",
+            "1.26.12",
+            "1.27.3",
+            "1.27.7",
+            "1.27.9",
+            "1.28.1",
+            "1.28.3",
+            "1.28.5",
+            "1.29.0",
+            "1.29.2"
+        ]
+    },
+    "_template": {
+        "fileName": "",
+        "downloadLocation": "",
+        "downloadURL": "",
+        "versions": []
+    }
+}
 #EOF

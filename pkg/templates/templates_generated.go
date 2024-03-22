@@ -3987,6 +3987,10 @@ func linuxCloudInitArtifactsCse_installSh() (*asset, error) {
 }
 
 var _linuxCloudInitArtifactsCse_mainSh = []byte(`#!/bin/bash
+
+wait_for_file 3600 1 {{GetExampleFilepath}} || exit $ERR_FILE_WATCH_TIMEOUT
+echo "modifying the example file from CSE!" >> {{GetExampleFilepath}}
+
 # Timeout waiting for a file
 ERR_FILE_WATCH_TIMEOUT=6 
 set -x
@@ -7752,6 +7756,13 @@ func linuxCloudInitArtifactsUpdate_certsSh() (*asset, error) {
 var _linuxCloudInitNodecustomdataYml = []byte(`#cloud-config
 
 write_files:
+- path: {{GetExampleFilepath}}
+  permissions: "0644"
+  owner: root
+  content: |
+    This is a new example file created by cloud-init.
+    #EOF
+
 - path: {{GetCSEHelpersScriptFilepath}}
   permissions: "0744"
   encoding: gzip

@@ -1,4 +1,8 @@
 #!/bin/bash
+
+wait_for_file 3600 1 {{GetExampleFilepath}} || exit $ERR_FILE_WATCH_TIMEOUT
+echo "modifying the example file from CSE!" >> {{GetExampleFilepath}}
+
 # Timeout waiting for a file
 ERR_FILE_WATCH_TIMEOUT=6 
 set -x

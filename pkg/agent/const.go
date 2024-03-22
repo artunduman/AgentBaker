@@ -94,6 +94,7 @@ const (
 
 // cloud-init destination file references.
 const (
+	newExampleFilepath                   = "/opt/azure/containers/example.txt"
 	cseHelpersScriptFilepath             = "/opt/azure/containers/provision_source.sh"
 	cseHelpersScriptDistroFilepath       = "/opt/azure/containers/provision_source_distro.sh"
 	cseInstallScriptFilepath             = "/opt/azure/containers/provision_installs.sh"
